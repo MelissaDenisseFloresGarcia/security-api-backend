@@ -1,72 +1,136 @@
 const express = require("express");
 const cors = require("cors");
+const jwt = require("jsonwebtoken");
+const fs = require("fs");
+
+const productsRoutes = require("./routes/products");
 
 const app = express();
 
-// Permitir solicitudes desde el frontend
-app.use(cors());
-
-// Permitir recibir JSON
-app.use(express.json());
-
 const PORT = 3000;
 
-const API_KEY = "my-secret-key";
+const SECRET_KEY = "elf-secret-key";
 
 
-// Endpoint público
-app.get("/health", (req, res) => {
+// Crear carpeta de logs
+fs.mkdirSync("/app/logs", { recursive: true });
 
-    res.json({
-        status: "ok"
+
+// Obtener IP del cliente
+function getClientIp(req) {
+
+    const forwarded = req.headers["x-forwarded-for"];
+
+    let ip = forwarded
+        ? forwarded.split(",")[0].trim()
+        : req.socket.remoteAddress || "-";
+
+    ip = ip.replace(/^::ffff:/, "");
+
+    return ip;
+}
+
+
+// Registro de solicitudes HTTP para Fail2Ban
+function accessLogger(req, res, next) {
+
+    res.on("finish", () => {
+
+        const ip = getClientIp(req);
+
+        const logLine =
+            `${new Date().toISOString()} ${ip} "${req.method} ${req.originalUrl}" ${res.statusCode}\n`;
+
+        fs.appendFile(
+            "/app/logs/http.log",
+            logLine,
+            (error) => {
+
+                if (error) {
+                    console.error(
+                        "Error writing HTTP log:",
+                        error
+                    );
+                }
+
+            }
+        );
+
     });
 
-});
+    next();
+}
 
 
-// Revisar API Key
-function checkApiKey(req, res, next) {
+app.use(cors());
 
-    const key = req.headers["x-api-key"];
+app.use(express.json());
 
-    if (!key || key !== API_KEY) {
+
+// Activar registro HTTP
+app.use(accessLogger);
+
+
+// Middleware para validar JWT
+function verifyToken(req, res, next) {
+
+    const authHeader = req.headers.authorization;
+
+    if (!authHeader) {
 
         return res.status(401).json({
-            error: "Unauthorized"
+            message: "No authorization token provided"
         });
 
     }
 
-    next();
+    const token = authHeader.split(" ")[1];
+
+    try {
+
+        const decoded = jwt.verify(
+            token,
+            SECRET_KEY
+        );
+
+        req.user = decoded;
+
+        next();
+
+    } catch (error) {
+
+        return res.status(403).json({
+            message: "Invalid token"
+        });
+
+    }
 
 }
 
 
-// GET protegido
-app.get("/api/data", checkApiKey, (req, res) => {
+// Ruta de prueba
+app.get("/", (req, res) => {
 
     res.json({
-        message: "Protected data",
-        course: "Security Exercise",
-        status: "success"
+        message: "e.l.f. Backend running"
     });
 
 });
 
 
-// POST protegido
-app.post("/api/data", checkApiKey, (req, res) => {
-
-    res.json({
-        message: "POST received"
-    });
-
-});
+// Productos protegidos por JWT
+app.use(
+    "/products",
+    verifyToken,
+    productsRoutes
+);
 
 
 // Iniciar servidor
 app.listen(PORT, () => {
 
-    console.log(`Server running on port ${PORT}`);
+    console.log(
+        `Backend running on port ${PORT}`
+    );
 
 });
